@@ -3,7 +3,6 @@ package org.opalj
 package tac2bc
 
 import scala.collection.mutable
-
 import org.opalj.BinaryArithmeticOperators.Add
 import org.opalj.BinaryArithmeticOperators.And
 import org.opalj.BinaryArithmeticOperators.Divide
@@ -38,43 +37,9 @@ import org.opalj.br.ClassType
 import org.opalj.br.ReferenceType
 import org.opalj.br.ShortType
 import org.opalj.br.instructions._
-import org.opalj.tac.ArrayLength
-import org.opalj.tac.ArrayLoad
-import org.opalj.tac.BinaryExpr
-import org.opalj.tac.Call
-import org.opalj.tac.ClassConst
-import org.opalj.tac.Compare
-import org.opalj.tac.Const
-import org.opalj.tac.DoubleConst
-import org.opalj.tac.DVar
-import org.opalj.tac.DynamicConst
-import org.opalj.tac.Expr
-import org.opalj.tac.FloatConst
-import org.opalj.tac.GetField
-import org.opalj.tac.GetStatic
-import org.opalj.tac.InstanceOf
-import org.opalj.tac.IntConst
-import org.opalj.tac.InvokedynamicFunctionCall
-import org.opalj.tac.LongConst
-import org.opalj.tac.MethodHandleConst
-import org.opalj.tac.MethodTypeConst
-import org.opalj.tac.New
-import org.opalj.tac.NewArray
-import org.opalj.tac.NonVirtualFunctionCall
-import org.opalj.tac.NonVirtualMethodCall
-import org.opalj.tac.NullExpr
-import org.opalj.tac.PrefixExpr
-import org.opalj.tac.PrimitiveTypecastExpr
-import org.opalj.tac.StaticFunctionCall
-import org.opalj.tac.StaticMethodCall
-import org.opalj.tac.StringConst
-import org.opalj.tac.UVar
-import org.opalj.tac.V
-import org.opalj.tac.Var
-import org.opalj.tac.VirtualFunctionCall
-import org.opalj.tac.VirtualMethodCall
+import org.opalj.tac.{ArrayLength, ArrayLoad, BinaryExpr, Call, ClassConst, Compare, Const, DoubleConst, DynamicConst, Expr, FloatConst, GetField, GetStatic, InstanceOf, IntConst, InvokedynamicFunctionCall, LongConst, MethodHandleConst, MethodTypeConst, New, NewArray, NonVirtualFunctionCall, NonVirtualMethodCall, NullExpr, PrefixExpr, PrimitiveTypecastExpr, StaticFunctionCall, StaticMethodCall, StringConst, V, Var, VirtualFunctionCall, VirtualMethodCall}
+import org.opalj.tac2bc.VarUtils.getVarId
 import org.opalj.value.IsSReferenceValue
-import org.opalj.value.ValueInformation
 
 object ExprProcessor {
 
@@ -88,14 +53,15 @@ object ExprProcessor {
     def processExpression(
         expr:         Expr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         expr match {
-            case const: Const              => loadConstant(const, code)
-            case variable: Var[V]          => loadVariable(variable, tacToLVIndex, code)
-            case getField: GetField[V]     => processGetField(getField, tacToLVIndex, code)
-            case getStatic: GetStatic      => processGetStatic(getStatic, code)
-            case binaryExpr: BinaryExpr[V] => processBinaryExpr(binaryExpr, tacToLVIndex, code)
+            case const: Const              => loadConstant(const, code, state)
+            case variable: Var[V]          => loadVariable(variable, tacToLVIndex, code, state)
+            case getField: GetField[V]     => processGetField(getField, tacToLVIndex, code, state)
+            case getStatic: GetStatic      => processGetStatic(getStatic, code, state)
+            case binaryExpr: BinaryExpr[V] => processBinaryExpr(binaryExpr, tacToLVIndex, code, state)
             case callExpr: Call[V @unchecked] =>
                 val call @ Call(declaringClass, isInterface, name, descriptor) = callExpr
                 processCall(
@@ -105,19 +71,20 @@ object ExprProcessor {
                     name,
                     descriptor,
                     tacToLVIndex,
-                    code
+                    code,
+                    state
                 )
             case newExpr: New => processNewExpr(newExpr.tpe, code)
             case primitiveTypecastExpr: PrimitiveTypecastExpr[V] =>
-                processPrimitiveTypeCastExpr(primitiveTypecastExpr, tacToLVIndex, code)
-            case arrayLength: ArrayLength[V] => processArrayLength(arrayLength, tacToLVIndex, code)
-            case arrayLoadExpr: ArrayLoad[V] => processArrayLoad(arrayLoadExpr, tacToLVIndex, code)
-            case newArrayExpr: NewArray[V]   => processNewArray(newArrayExpr, tacToLVIndex, code)
+                processPrimitiveTypeCastExpr(primitiveTypecastExpr, tacToLVIndex, code, state)
+            case arrayLength: ArrayLength[V] => processArrayLength(arrayLength, tacToLVIndex, code, state)
+            case arrayLoadExpr: ArrayLoad[V] => processArrayLoad(arrayLoadExpr, tacToLVIndex, code, state)
+            case newArrayExpr: NewArray[V]   => processNewArray(newArrayExpr, tacToLVIndex, code, state)
             case invokedynamicFunctionCall: InvokedynamicFunctionCall[V] =>
-                processInvokedynamicFunctionCall(invokedynamicFunctionCall, tacToLVIndex, code)
-            case compare: Compare[V]       => processCompare(compare, tacToLVIndex, code)
-            case prefixExpr: PrefixExpr[V] => processPrefixExpr(prefixExpr, tacToLVIndex, code)
-            case instanceOf: InstanceOf[V] => processInstanceOf(instanceOf, tacToLVIndex, code)
+                processInvokedynamicFunctionCall(invokedynamicFunctionCall, tacToLVIndex, code, state)
+            case compare: Compare[V]       => processCompare(compare, tacToLVIndex, code, state)
+            case prefixExpr: PrefixExpr[V] => processPrefixExpr(prefixExpr, tacToLVIndex, code, state)
+            case instanceOf: InstanceOf[V] => processInstanceOf(instanceOf, tacToLVIndex, code, state)
             case _ =>
                 throw new UnsupportedOperationException("Unsupported expression type" + expr)
         }
@@ -126,19 +93,21 @@ object ExprProcessor {
     def processInstanceOf(
         instanceOf:   InstanceOf[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        ExprProcessor.processExpression(instanceOf.value, tacToLVIndex, code)
+        ExprProcessor.processExpression(instanceOf.value, tacToLVIndex, code, state)
         code += INSTANCEOF(instanceOf.cmpTpe)
     }
 
     def processPrefixExpr(
         prefixExpr:   PrefixExpr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Process the operand (the expression being negated)
-        ExprProcessor.processExpression(prefixExpr.operand, tacToLVIndex, code)
+        ExprProcessor.processExpression(prefixExpr.operand, tacToLVIndex, code, state)
         // Note that [[UnaryArithmeticOperators.Negate]] is the only UnaryArithmeticOperator used
         assert(prefixExpr.op eq UnaryArithmeticOperators.Negate)
         // Determine the appropriate negation instruction based on the operand type
@@ -157,12 +126,13 @@ object ExprProcessor {
     def processCompare(
         compare:      Compare[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Process the left expression
-        processExpression(compare.left, tacToLVIndex, code)
+        processExpression(compare.left, tacToLVIndex, code, state)
         // Process the right expression
-        processExpression(compare.right, tacToLVIndex, code)
+        processExpression(compare.right, tacToLVIndex, code, state)
         // Determine the appropriate comparison instruction
         code += {
             (compare.left.cTpe, compare.condition) match {
@@ -179,11 +149,12 @@ object ExprProcessor {
     def processInvokedynamicFunctionCall(
         invokedynamicFunctionCall: InvokedynamicFunctionCall[V],
         tacToLVIndex:              Map[Int, Int],
-        code:                      mutable.ListBuffer[CodeElement[Nothing]]
+        code:                      mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Process each parameter
         for (param <- invokedynamicFunctionCall.params)
-            ExprProcessor.processExpression(param, tacToLVIndex, code)
+            ExprProcessor.processExpression(param, tacToLVIndex, code, state)
         code += DEFAULT_INVOKEDYNAMIC(
             invokedynamicFunctionCall.bootstrapMethod,
             invokedynamicFunctionCall.name,
@@ -194,11 +165,12 @@ object ExprProcessor {
     def processNewArray(
         newArrayExpr: NewArray[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Process each parameter
         for (count <- newArrayExpr.counts.reverse)
-            ExprProcessor.processExpression(count, tacToLVIndex, code)
+            ExprProcessor.processExpression(count, tacToLVIndex, code, state)
         code += {
             if (newArrayExpr.counts.size > 1) {
                 MULTIANEWARRAY(newArrayExpr.tpe, newArrayExpr.counts.size)
@@ -213,12 +185,13 @@ object ExprProcessor {
     def processArrayLoad(
         arrayLoadExpr: ArrayLoad[V],
         tacToLVIndex:  Map[Int, Int],
-        code:          mutable.ListBuffer[CodeElement[Nothing]]
+        code:          mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Load the array reference onto the stack
-        processExpression(arrayLoadExpr.arrayRef, tacToLVIndex, code)
+        processExpression(arrayLoadExpr.arrayRef, tacToLVIndex, code, state)
         // Load the index onto the stack
-        processExpression(arrayLoadExpr.index, tacToLVIndex, code)
+        processExpression(arrayLoadExpr.index, tacToLVIndex, code, state)
         // Infer the element type from the array reference expression
         val elementType = inferElementType(arrayLoadExpr.arrayRef)
         code += {
@@ -247,10 +220,11 @@ object ExprProcessor {
     def processArrayLength(
         arrayLength:  ArrayLength[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Process the receiver object
-        ExprProcessor.processExpression(arrayLength.arrayRef, tacToLVIndex, code)
+        ExprProcessor.processExpression(arrayLength.arrayRef, tacToLVIndex, code, state)
         code += ARRAYLENGTH
     }
 
@@ -268,11 +242,29 @@ object ExprProcessor {
         methodName:       String,
         methodDescriptor: MethodDescriptor,
         tacToLVIndex:     Map[Int, Int],
-        code:             mutable.ListBuffer[CodeElement[Nothing]]
+        code:             mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
+
+        // TODO: Kommutativität
+//        for (param <- call.allParams) {
+//            val paramLocation = state.locationOf(param.asVar, tacToLVIndex)
+//
+//            val needLoad = paramLocation match {
+//                case Some(OnStack(0)) | Some(OnStack(1)) => false
+//                case _                                   => true
+//            }
+//            if (needLoad) {
+//                ExprProcessor.processExpression(param, tacToLVIndex, code, state)
+//            }
+//        }
+
         // Process each parameter
-        for (param <- call.allParams) ExprProcessor.processExpression(param, tacToLVIndex, code)
-        code += {
+        for (param <- call.allParams) {
+            ExprProcessor.processExpression(param, tacToLVIndex, code, state)
+        }
+
+        val instr = {
             call match {
                 case _: VirtualMethodCall[V] | _: VirtualFunctionCall[V] =>
                     if (isInterface) INVOKEINTERFACE(declaringClass.asClassType, methodName, methodDescriptor)
@@ -283,160 +275,257 @@ object ExprProcessor {
                     INVOKESTATIC(declaringClass.asClassType, isInterface, methodName, methodDescriptor)
             }
         }
+
+        code += instr
+        state.updateFrame(instr)
     }
 
     private def loadConstant(
         constExpr: Const,
-        code:      mutable.ListBuffer[CodeElement[Nothing]]
+        code:      mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        code += {
-            constExpr match {
-                case _: NullExpr                 => ACONST_NULL
-                case IntConst(_, value)          => LoadConstantInstruction(value)
-                case FloatConst(_, value)        => LoadFloat(value)
-                case ClassConst(_, value)        => LoadClass(value)
-                case StringConst(_, value)       => LoadString(value)
-                case MethodHandleConst(_, value) => LoadMethodHandle(value)
-                case MethodTypeConst(_, value)   => LoadMethodType(value)
-                case DoubleConst(_, value)       => LoadDouble(value)
-                case LongConst(_, value)         => LoadLong(value)
-                case DynamicConst(_, bootstrapMethod, name, descriptor) =>
-                    LoadDynamic(bootstrapMethod, name, descriptor)
-            }
+        val instr = constExpr match {
+            case _: NullExpr                 => ACONST_NULL
+            case IntConst(_, value)          => LoadConstantInstruction(value)
+            case FloatConst(_, value)        => LoadFloat(value)
+            case ClassConst(_, value)        => LoadClass(value)
+            case StringConst(_, value)       => LoadString(value)
+            case MethodHandleConst(_, value) => LoadMethodHandle(value)
+            case MethodTypeConst(_, value)   => LoadMethodType(value)
+            case DoubleConst(_, value)       => LoadDouble(value)
+            case LongConst(_, value)         => LoadLong(value)
+            case DynamicConst(_, bootstrapMethod, name, descriptor) =>
+                LoadDynamic(bootstrapMethod, name, descriptor)
         }
-    }
-
-    // Method to get LVIndex for a variable
-    private def getVariableLvIndex(variable: Var[V], tacToLVIndex: Map[Int, Int]): Int = {
-        val tacIndex = variable match {
-            case dVar: DVar[ValueInformation] => dVar.originatedAt
-            case uVar: UVar[ValueInformation] => uVar.definedBy.head
-        }
-        tacToLVIndex.getOrElse(tacIndex, throw new RuntimeException(s"no index found for variable $variable"))
+        code += instr
+        state.updateFrame(instr)
     }
 
     private def loadVariable(
         variable:     Var[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        val index = getVariableLvIndex(variable, tacToLVIndex)
-        code += {
-            variable.cTpe match {
-                case ComputationalTypeInt       => ILOAD.canonicalRepresentation(index)
-                case ComputationalTypeFloat     => FLOAD.canonicalRepresentation(index)
-                case ComputationalTypeDouble    => DLOAD.canonicalRepresentation(index)
-                case ComputationalTypeLong      => LLOAD.canonicalRepresentation(index)
-                case ComputationalTypeReference => ALOAD.canonicalRepresentation(index)
-                case _ =>
-                    throw new UnsupportedOperationException(
-                        "Unsupported computational type for loading variable" + variable
-                    )
-            }
+
+        // Ermittele Location rein ID-basiert
+        val locOpt: Option[Location] = state.locationOf(variable.asVar, tacToLVIndex)
+
+        locOpt match {
+            /* Fall 1: Wert liegt schon ganz oben auf dem Stack ➜ gar nichts tun */
+            case Some(OnStack(0)) => // no-op
+
+            /* Fall 2: Wert liegt tiefer ➜ mit DUP / SWAP nach oben holen */
+            case Some(OnStack(depth)) =>
+                if (depth == 1) {
+                    code += SWAP
+                    state.swap()
+                } else {
+                    //TODO
+                    //code += DUP
+                    //state.dup();
+                    //state.swap()
+                }
+
+            /* Fall 3: Wert nicht Available  ➜ regulärer LOAD */
+            case Some(NotAvailable) =>
+                //TODO
+                val index = state.varLocations.get(variable) match {
+                    case Some(InLocal(i)) => i
+                    case _                => getVarId(variable, tacToLVIndex)
+                }
+
+                val loadInstr = variable.cTpe match {
+                    case ComputationalTypeInt       => ILOAD.canonicalRepresentation(index)
+                    case ComputationalTypeFloat     => FLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeDouble    => DLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeLong      => LLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeReference => ALOAD.canonicalRepresentation(index)
+                    case _ =>
+                        throw new UnsupportedOperationException(
+                            "Unsupported computational type for loading variable" + variable
+                        )
+                }
+
+                code += loadInstr
+                state.updateFrame(loadInstr)
+                state.varLocations(variable) = OnStack(0)
+
+            /* Fall 4: Wert in Local ➜ regulärer LOAD */
+            case Some(InLocal(idx)) =>
+                //TODO
+                val index = state.varLocations.get(variable) match {
+                    case Some(InLocal(i)) => i
+                    case _                => getVarId(variable, tacToLVIndex)
+                }
+
+                val loadInstr = variable.cTpe match {
+                    case ComputationalTypeInt       => ILOAD.canonicalRepresentation(index)
+                    case ComputationalTypeFloat     => FLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeDouble    => DLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeLong      => LLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeReference => ALOAD.canonicalRepresentation(index)
+                    case _ =>
+                        throw new UnsupportedOperationException(
+                            "Unsupported computational type for loading variable" + variable
+                        )
+                }
+
+                code += loadInstr
+                state.updateFrame(loadInstr)
+                state.varLocations(variable) = OnStack(0)
+
+            /* Fall 5: Wert nicht gefunden ➜ regulärer LOAD */
+            case None =>
+                //TODO
+                val index = state.varLocations.get(variable) match {
+                    case Some(InLocal(i)) => i
+                    case _                => getVarId(variable, tacToLVIndex)
+                }
+
+                val loadInstr = variable.cTpe match {
+                    case ComputationalTypeInt       => ILOAD.canonicalRepresentation(index)
+                    case ComputationalTypeFloat     => FLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeDouble    => DLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeLong      => LLOAD.canonicalRepresentation(index)
+                    case ComputationalTypeReference => ALOAD.canonicalRepresentation(index)
+                    case _ =>
+                        throw new UnsupportedOperationException(
+                            "Unsupported computational type for loading variable" + variable
+                        )
+                }
+
+                code += loadInstr
+                state.updateFrame(loadInstr)
+                state.varLocations(variable) = OnStack(0)
         }
     }
 
     def storeVariable(
         variable:     Var[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        val index: Int = getVariableLvIndex(variable, tacToLVIndex)
-        code += {
-            variable.cTpe match {
-                case ComputationalTypeInt       => ISTORE.canonicalRepresentation(index)
-                case ComputationalTypeFloat     => FSTORE.canonicalRepresentation(index)
-                case ComputationalTypeDouble    => DSTORE.canonicalRepresentation(index)
-                case ComputationalTypeLong      => LSTORE.canonicalRepresentation(index)
-                case ComputationalTypeReference => ASTORE.canonicalRepresentation(index)
-                case _ =>
-                    throw new UnsupportedOperationException(
-                        "Unsupported computational type for storing variable" + variable
-                    )
-            }
+        val index: Int = getVarId(variable, tacToLVIndex)
+
+        val storeInstr = variable.cTpe match {
+            case ComputationalTypeInt       => ISTORE.canonicalRepresentation(index)
+            case ComputationalTypeFloat     => FSTORE.canonicalRepresentation(index)
+            case ComputationalTypeDouble    => DSTORE.canonicalRepresentation(index)
+            case ComputationalTypeLong      => LSTORE.canonicalRepresentation(index)
+            case ComputationalTypeReference => ASTORE.canonicalRepresentation(index)
+            case _ =>
+                throw new UnsupportedOperationException(
+                    "Unsupported computational type for storing variable" + variable
+                )
         }
+
+        code += storeInstr
+        state.updateFrame(storeInstr)
+        state.varLocations(variable) = InLocal(index)
     }
 
     def processGetField(
         getField:     GetField[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Load the object reference onto the stack
-        processExpression(getField.objRef, tacToLVIndex, code)
+        processExpression(getField.objRef, tacToLVIndex, code, state)
         // Generate the GETFIELD instruction
         code += GETFIELD(getField.declaringClass, getField.name, getField.declaredFieldType)
     }
 
     def processGetStatic(
         getStatic: GetStatic,
-        code:      mutable.ListBuffer[CodeElement[Nothing]]
+        code:      mutable.ListBuffer[CodeElement[Nothing]],
+        state:     FrameState
     ): Unit = {
-        code += GETSTATIC(getStatic.declaringClass, getStatic.name, getStatic.declaredFieldType)
+        val instr = GETSTATIC(getStatic.declaringClass, getStatic.name, getStatic.declaredFieldType)
+        code += instr
+        state.updateFrame(instr)
     }
 
     def processBinaryExpr(
         binaryExpr:   BinaryExpr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        // process the left expr and save the pc to give in the right expr processing
-        processExpression(binaryExpr.left, tacToLVIndex, code)
-        // process the right Expr
-        processExpression(binaryExpr.right, tacToLVIndex, code)
 
-        code += {
-            (binaryExpr.cTpe, binaryExpr.op) match {
-                // Double
-                case (ComputationalTypeDouble, Add)      => DADD
-                case (ComputationalTypeDouble, Subtract) => DSUB
-                case (ComputationalTypeDouble, Multiply) => DMUL
-                case (ComputationalTypeDouble, Divide)   => DDIV
-                case (ComputationalTypeDouble, Modulo)   => DREM
-                // Float
-                case (ComputationalTypeFloat, Add)      => FADD
-                case (ComputationalTypeFloat, Subtract) => FSUB
-                case (ComputationalTypeFloat, Multiply) => FMUL
-                case (ComputationalTypeFloat, Divide)   => FDIV
-                case (ComputationalTypeFloat, Modulo)   => FREM
-                // Int
-                case (ComputationalTypeInt, Add)                => IADD
-                case (ComputationalTypeInt, Subtract)           => ISUB
-                case (ComputationalTypeInt, Multiply)           => IMUL
-                case (ComputationalTypeInt, Divide)             => IDIV
-                case (ComputationalTypeInt, Modulo)             => IREM
-                case (ComputationalTypeInt, And)                => IAND
-                case (ComputationalTypeInt, Or)                 => IOR
-                case (ComputationalTypeInt, ShiftLeft)          => ISHL
-                case (ComputationalTypeInt, ShiftRight)         => ISHR
-                case (ComputationalTypeInt, UnsignedShiftRight) => IUSHR
-                case (ComputationalTypeInt, XOr)                => IXOR
-                // Long
-                case (ComputationalTypeLong, Add)                => LADD
-                case (ComputationalTypeLong, Subtract)           => LSUB
-                case (ComputationalTypeLong, Multiply)           => LMUL
-                case (ComputationalTypeLong, Divide)             => LDIV
-                case (ComputationalTypeLong, Modulo)             => LREM
-                case (ComputationalTypeLong, And)                => LAND
-                case (ComputationalTypeLong, Or)                 => LOR
-                case (ComputationalTypeLong, ShiftLeft)          => LSHL
-                case (ComputationalTypeLong, ShiftRight)         => LSHR
-                case (ComputationalTypeLong, UnsignedShiftRight) => LUSHR
-                case (ComputationalTypeLong, XOr)                => LXOR
-                // Unsupported
-                case _ => throw new UnsupportedOperationException(
-                        "Unsupported operation or computational type in BinaryExpr" + binaryExpr
-                    )
-            }
+        // Kommutativität
+        val leftVar  = binaryExpr.left.asVar
+        val rightVar = binaryExpr.right.asVar
+
+        val leftLocation = state.locationOf(leftVar, tacToLVIndex)
+        val rightLocation = state.locationOf(rightVar, tacToLVIndex)
+
+        if (leftLocation.exists { case OnStack(0)|OnStack(1) => false; case _ => true }) {
+            processExpression(binaryExpr.left, tacToLVIndex, code, state)
         }
+
+        if (rightLocation.exists { case OnStack(0)|OnStack(1) => false; case _ => true }) {
+            processExpression(binaryExpr.right, tacToLVIndex, code, state)
+        }
+
+        val instr = (binaryExpr.cTpe, binaryExpr.op) match {
+            // Double
+            case (ComputationalTypeDouble, Add)      => DADD
+            case (ComputationalTypeDouble, Subtract) => DSUB
+            case (ComputationalTypeDouble, Multiply) => DMUL
+            case (ComputationalTypeDouble, Divide)   => DDIV
+            case (ComputationalTypeDouble, Modulo)   => DREM
+            // Float
+            case (ComputationalTypeFloat, Add)      => FADD
+            case (ComputationalTypeFloat, Subtract) => FSUB
+            case (ComputationalTypeFloat, Multiply) => FMUL
+            case (ComputationalTypeFloat, Divide)   => FDIV
+            case (ComputationalTypeFloat, Modulo)   => FREM
+            // Int
+            case (ComputationalTypeInt, Add)                => IADD
+            case (ComputationalTypeInt, Subtract)           => ISUB
+            case (ComputationalTypeInt, Multiply)           => IMUL
+            case (ComputationalTypeInt, Divide)             => IDIV
+            case (ComputationalTypeInt, Modulo)             => IREM
+            case (ComputationalTypeInt, And)                => IAND
+            case (ComputationalTypeInt, Or)                 => IOR
+            case (ComputationalTypeInt, ShiftLeft)          => ISHL
+            case (ComputationalTypeInt, ShiftRight)         => ISHR
+            case (ComputationalTypeInt, UnsignedShiftRight) => IUSHR
+            case (ComputationalTypeInt, XOr)                => IXOR
+            // Long
+            case (ComputationalTypeLong, Add)                => LADD
+            case (ComputationalTypeLong, Subtract)           => LSUB
+            case (ComputationalTypeLong, Multiply)           => LMUL
+            case (ComputationalTypeLong, Divide)             => LDIV
+            case (ComputationalTypeLong, Modulo)             => LREM
+            case (ComputationalTypeLong, And)                => LAND
+            case (ComputationalTypeLong, Or)                 => LOR
+            case (ComputationalTypeLong, ShiftLeft)          => LSHL
+            case (ComputationalTypeLong, ShiftRight)         => LSHR
+            case (ComputationalTypeLong, UnsignedShiftRight) => LUSHR
+            case (ComputationalTypeLong, XOr)                => LXOR
+            // Unsupported
+            case _ => throw new UnsupportedOperationException(
+                "Unsupported operation or computational type in BinaryExpr" + binaryExpr
+            )
+        }
+
+        code += instr
+        state.updateFrame(instr)
     }
+
     def processPrimitiveTypeCastExpr(
         primitiveTypecastExpr: PrimitiveTypecastExpr[V],
         tacToLVIndex:          Map[Int, Int],
-        code:                  mutable.ListBuffer[CodeElement[Nothing]]
+        code:                  mutable.ListBuffer[CodeElement[Nothing]],
+        state:                 FrameState
     ): Unit = {
         // First, process the operand expression and add its instructions to the buffer
-        processExpression(primitiveTypecastExpr.operand, tacToLVIndex, code)
+        processExpression(primitiveTypecastExpr.operand, tacToLVIndex, code, state)
 
         code += {
             (primitiveTypecastExpr.operand.cTpe, primitiveTypecastExpr.targetTpe) match {

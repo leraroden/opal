@@ -12,66 +12,9 @@ import org.opalj.RelationalOperators.LE
 import org.opalj.RelationalOperators.LT
 import org.opalj.RelationalOperators.NE
 import org.opalj.ba.{CATCH, CodeElement, LabelElement, TRY, TRYEND}
-import org.opalj.br.BooleanType
-import org.opalj.br.BootstrapMethod
-import org.opalj.br.ByteType
-import org.opalj.br.CharType
-import org.opalj.br.ComputationalTypeDouble
-import org.opalj.br.ComputationalTypeFloat
-import org.opalj.br.ComputationalTypeInt
-import org.opalj.br.ComputationalTypeLong
-import org.opalj.br.ComputationalTypeReference
-import org.opalj.br.DoubleType
-import org.opalj.br.FieldType
-import org.opalj.br.FloatType
-import org.opalj.br.IntegerType
-import org.opalj.br.LongType
-import org.opalj.br.MethodDescriptor
-import org.opalj.br.ClassType
-import org.opalj.br.PCs
-import org.opalj.br.ReferenceType
-import org.opalj.br.ShortType
+import org.opalj.br.{BooleanType, BootstrapMethod, ByteType, CharType, ClassType, ComputationalTypeDouble, ComputationalTypeFloat, ComputationalTypeInt, ComputationalTypeLong, ComputationalTypeReference, DoubleType, FieldType, FloatType, IntegerType, LongType, MethodDescriptor, PCs, ReferenceType, ShortType}
 import org.opalj.br.analyses.SomeProject
-import org.opalj.br.instructions.AASTORE
-import org.opalj.br.instructions.ARETURN
-import org.opalj.br.instructions.ATHROW
-import org.opalj.br.instructions.BASTORE
-import org.opalj.br.instructions.CASTORE
-import org.opalj.br.instructions.CHECKCAST
-import org.opalj.br.instructions.DASTORE
-import org.opalj.br.instructions.DEFAULT_INVOKEDYNAMIC
-import org.opalj.br.instructions.DRETURN
-import org.opalj.br.instructions.FASTORE
-import org.opalj.br.instructions.FRETURN
-import org.opalj.br.instructions.IASTORE
-import org.opalj.br.instructions.IRETURN
-import org.opalj.br.instructions.LabeledGOTO
-import org.opalj.br.instructions.LabeledIF_ACMPEQ
-import org.opalj.br.instructions.LabeledIF_ACMPNE
-import org.opalj.br.instructions.LabeledIF_ICMPEQ
-import org.opalj.br.instructions.LabeledIF_ICMPGE
-import org.opalj.br.instructions.LabeledIF_ICMPGT
-import org.opalj.br.instructions.LabeledIF_ICMPLE
-import org.opalj.br.instructions.LabeledIF_ICMPLT
-import org.opalj.br.instructions.LabeledIF_ICMPNE
-import org.opalj.br.instructions.LabeledIFNONNULL
-import org.opalj.br.instructions.LabeledIFNULL
-import org.opalj.br.instructions.LabeledJSR
-import org.opalj.br.instructions.LabeledLOOKUPSWITCH
-import org.opalj.br.instructions.LabeledTABLESWITCH
-import org.opalj.br.instructions.LASTORE
-import org.opalj.br.instructions.LRETURN
-import org.opalj.br.instructions.MONITORENTER
-import org.opalj.br.instructions.MONITOREXIT
-import org.opalj.br.instructions.NOP
-import org.opalj.br.instructions.POP
-import org.opalj.br.instructions.POP2
-import org.opalj.br.instructions.PUTFIELD
-import org.opalj.br.instructions.PUTSTATIC
-import org.opalj.br.instructions.RET
-import org.opalj.br.instructions.RETURN
-import org.opalj.br.instructions.RewriteLabel
-import org.opalj.br.instructions.SASTORE
+import org.opalj.br.instructions.{AASTORE, ARETURN, ATHROW, BASTORE, CASTORE, CHECKCAST, DASTORE, DEFAULT_INVOKEDYNAMIC, DRETURN, FASTORE, FRETURN, IASTORE, IRETURN, LASTORE, LRETURN, LabeledGOTO, LabeledIFNONNULL, LabeledIFNULL, LabeledIF_ACMPEQ, LabeledIF_ACMPNE, LabeledIF_ICMPEQ, LabeledIF_ICMPGE, LabeledIF_ICMPGT, LabeledIF_ICMPLE, LabeledIF_ICMPLT, LabeledIF_ICMPNE, LabeledJSR, LabeledLOOKUPSWITCH, LabeledTABLESWITCH, MONITORENTER, MONITOREXIT, NOP, POP, POP2, PUTFIELD, PUTSTATIC, RET, RETURN, RewriteLabel, SASTORE}
 import org.opalj.collection.immutable.IntIntPair
 import org.opalj.collection.immutable.IntTrieSet
 import org.opalj.tac.ArrayStore
@@ -115,13 +58,14 @@ object StmtProcessor {
         stmt:         Stmt[V],
         tacToLVIndex: Map[Int, Int],
         labels:       Array[RewriteLabel],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     )(implicit project: SomeProject): Unit = {
         stmt match {
             case Assignment(_, targetVar, expr) =>
-                processAssignment(targetVar, expr, tacToLVIndex, code)
+                processAssignment(targetVar, expr, tacToLVIndex, code, state)
             case ArrayStore(_, arrayRef, index, value) =>
-                processArrayStore(arrayRef, index, value, tacToLVIndex, code)
+                processArrayStore(arrayRef, index, value, tacToLVIndex, code, state)
             case CaughtException(_, exceptionType, throwingStmts) =>
                 // TODO: handle CaughtExceptions
                 processCaughtException(
@@ -131,9 +75,9 @@ object StmtProcessor {
                     labels
                 )
             case ExprStmt(_, expr) =>
-                processExprStmt(expr, tacToLVIndex, code)
+                processExprStmt(expr, tacToLVIndex, code, state)
             case If(_, left, condition, right, target) =>
-                processIf(left, condition, right, labels(target), tacToLVIndex, code)
+                processIf(left, condition, right, labels(target), tacToLVIndex, code, state)
             case Goto(_, target) =>
                 processGoto(labels(target), code)
             case Switch(_, defaultTarget, index, npairs) =>
@@ -143,7 +87,8 @@ object StmtProcessor {
                     npairs,
                     tacToLVIndex,
                     code,
-                    labels
+                    labels,
+                    state
                 )
             case JSR(_, target) =>
                 processJSR(labels(target), code)
@@ -156,7 +101,8 @@ object StmtProcessor {
                     name,
                     descriptor,
                     tacToLVIndex,
-                    code
+                    code,
+                    state
                 )
             case InvokedynamicMethodCall(_, bootstrapMethod, name, descriptor, params) =>
                 processInvokeDynamicMethodCall(
@@ -165,12 +111,13 @@ object StmtProcessor {
                     descriptor,
                     params,
                     tacToLVIndex,
-                    code
+                    code,
+                    state
                 )
             case MonitorEnter(_, objRef) =>
-                processMonitorEnter(objRef, tacToLVIndex, code)
+                processMonitorEnter(objRef, tacToLVIndex, code, state)
             case MonitorExit(_, objRef) =>
-                processMonitorExit(objRef, tacToLVIndex, code)
+                processMonitorExit(objRef, tacToLVIndex, code, state)
             case PutField(_, declaringClass, name, declaredFieldType, objRef, value) =>
                 processPutField(
                     declaringClass,
@@ -179,7 +126,8 @@ object StmtProcessor {
                     objRef,
                     value,
                     tacToLVIndex,
-                    code
+                    code,
+                    state
                 )
             case PutStatic(_, declaringClass, name, declaredFieldType, value) =>
                 processPutStatic(
@@ -188,18 +136,19 @@ object StmtProcessor {
                     declaredFieldType,
                     value,
                     tacToLVIndex,
-                    code
+                    code,
+                    state
                 )
             case Checkcast(_, value, cmpTpe) =>
-                processCheckCast(value, cmpTpe, tacToLVIndex, code)
+                processCheckCast(value, cmpTpe, tacToLVIndex, code, state)
             case Ret(_, returnAddresses) =>
                 processRet(returnAddresses, code)
             case ReturnValue(_, expr) =>
-                processReturnValue(expr, tacToLVIndex, code)
+                processReturnValue(expr, tacToLVIndex, code, state)
             case Return(_) =>
                 processReturn(code)
             case Throw(_, exception) =>
-                processThrow(exception, tacToLVIndex, code)
+                processThrow(exception, tacToLVIndex, code, state)
             case Nop(_) =>
                 processNop(code)
             case _ => throw new UnsupportedOperationException(s"Unsupported TAC-Stmt: $stmt")
@@ -210,18 +159,45 @@ object StmtProcessor {
         targetVar:    Var[V],
         expr:         Expr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        ExprProcessor.processExpression(expr, tacToLVIndex, code)
-        ExprProcessor.storeVariable(targetVar, tacToLVIndex, code)
+        ExprProcessor.processExpression(expr, tacToLVIndex, code, state)
+
+        // Aktualisiert varLocations und den Stack.
+        state.varLocations(targetVar) = OnStack(0)
+
+        // Ersetzen den Platzhalter auf dem Stack durch targetVar.
+        if (state.stack.nonEmpty) {
+            val (_, ctg) = state.stack.pop()
+            state.stack.push((targetVar.asInstanceOf[V], ctg))
+        }
+
+        if (shouldSpill(targetVar, state)) {
+            // Wert muss in Local → generate STORE
+            ExprProcessor.storeVariable(targetVar, tacToLVIndex, code, state)
+        }
+    }
+
+    /** Spill, wenn die nächste TAC-Statement-Nutzung von targetVar **nicht** Stack-basiert erfolgt. */
+    private def shouldSpill(
+        variable: Var[V],
+        state: FrameState
+        ): Boolean = {
+
+        state.varLocations.get(variable.asVar) match {
+            case Some(OnStack(0))   => false
+            case _            => true
+        }
     }
 
     def processExprStmt(
         expr:         Expr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        ExprProcessor.processExpression(expr, tacToLVIndex, code)
+        ExprProcessor.processExpression(expr, tacToLVIndex, code, state)
         code += (if (expr.cTpe.isCategory2) POP2 else POP)
     }
 
@@ -231,7 +207,8 @@ object StmtProcessor {
         npairs:        ArraySeq[IntIntPair /*(Case Value, Jump Target)*/ ],
         tacToLVIndex:  Map[Int, Int],
         code:          mutable.ListBuffer[CodeElement[Nothing]],
-        labels:        Array[RewriteLabel]
+        labels:        Array[RewriteLabel],
+        state:        FrameState
     )(implicit project: SomeProject): Unit = {
         // Transform nparis to their Labels
         // Cases that are not reachable contain the value -1 and must be removed from the npairs
@@ -242,7 +219,7 @@ object StmtProcessor {
         })
 
         // Translate the index expression first
-        ExprProcessor.processExpression(index, tacToLVIndex, code)
+        ExprProcessor.processExpression(index, tacToLVIndex, code, state)
 
         val minValue = npairs.minBy(_._1)._1
         val maxValue = npairs.maxBy(_._1)._1
@@ -279,9 +256,10 @@ object StmtProcessor {
     def processReturnValue(
         expr:         Expr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        ExprProcessor.processExpression(expr, tacToLVIndex, code)
+        ExprProcessor.processExpression(expr, tacToLVIndex, code, state)
         code += {
             expr.cTpe match {
                 case ComputationalTypeInt       => IRETURN
@@ -299,14 +277,15 @@ object StmtProcessor {
         index:        Expr[V],
         value:        Expr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Load the arrayRef onto the stack
-        ExprProcessor.processExpression(arrayRef, tacToLVIndex, code)
+        ExprProcessor.processExpression(arrayRef, tacToLVIndex, code, state)
         // Load the index onto the stack
-        ExprProcessor.processExpression(index, tacToLVIndex, code)
+        ExprProcessor.processExpression(index, tacToLVIndex, code, state)
         // Load the value to be stored onto the stack
-        ExprProcessor.processExpression(value, tacToLVIndex, code)
+        ExprProcessor.processExpression(value, tacToLVIndex, code, state)
         // Infer the element type from the array reference expression
         val elementType = ExprProcessor.inferElementType(arrayRef)
         code += {
@@ -334,9 +313,10 @@ object StmtProcessor {
         descriptor:      MethodDescriptor,
         params:          Seq[Expr[V]],
         tacToLVIndex:    Map[Int, Int],
-        code:            mutable.ListBuffer[CodeElement[Nothing]]
+        code:            mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        for (param <- params) ExprProcessor.processExpression(param, tacToLVIndex, code)
+        for (param <- params) ExprProcessor.processExpression(param, tacToLVIndex, code, state)
         code += DEFAULT_INVOKEDYNAMIC(bootstrapMethod, name, descriptor)
     }
 
@@ -344,12 +324,13 @@ object StmtProcessor {
         value:        Expr[V],
         cmpTpe:       ReferenceType,
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        ExprProcessor.processExpression(value, tacToLVIndex, code)
+        ExprProcessor.processExpression(value, tacToLVIndex, code, state)
         code += CHECKCAST(cmpTpe)
         value match {
-            case variable: Var[V] => ExprProcessor.storeVariable(variable, tacToLVIndex, code)
+            case variable: Var[V] => ExprProcessor.storeVariable(variable, tacToLVIndex, code, state)
             case _                => throw new UnsupportedOperationException(s"Error with CheckCast. Expected a Var but got: $value")
         }
     }
@@ -420,9 +401,10 @@ object StmtProcessor {
     def processThrow(
         exception:    Expr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        ExprProcessor.processExpression(exception, tacToLVIndex, code)
+        ExprProcessor.processExpression(exception, tacToLVIndex, code, state)
         code += ATHROW
     }
 
@@ -432,9 +414,10 @@ object StmtProcessor {
         declaredFieldType: FieldType,
         value:             Expr[V],
         tacToLVIndex:      Map[Int, Int],
-        code:              mutable.ListBuffer[CodeElement[Nothing]]
+        code:              mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
-        ExprProcessor.processExpression(value, tacToLVIndex, code)
+        ExprProcessor.processExpression(value, tacToLVIndex, code, state)
         code += PUTSTATIC(declaringClass, name, declaredFieldType)
     }
 
@@ -445,32 +428,35 @@ object StmtProcessor {
         objRef:            Expr[V],
         value:             Expr[V],
         tacToLVIndex:      Map[Int, Int],
-        code:              mutable.ListBuffer[CodeElement[Nothing]]
+        code:              mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Load the object reference onto the stack
-        ExprProcessor.processExpression(objRef, tacToLVIndex, code)
+        ExprProcessor.processExpression(objRef, tacToLVIndex, code, state)
         // Load the value to be stored onto the stack
-        ExprProcessor.processExpression(value, tacToLVIndex, code)
+        ExprProcessor.processExpression(value, tacToLVIndex, code, state)
         code += PUTFIELD(declaringClass, name, declaredFieldType)
     }
 
     def processMonitorEnter(
         objRef:       Expr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Load the object reference onto the stack
-        ExprProcessor.processExpression(objRef, tacToLVIndex, code)
+        ExprProcessor.processExpression(objRef, tacToLVIndex, code, state)
         code += MONITORENTER
     }
 
     def processMonitorExit(
         objRef:       Expr[V],
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // Load the object reference onto the stack
-        ExprProcessor.processExpression(objRef, tacToLVIndex, code)
+        ExprProcessor.processExpression(objRef, tacToLVIndex, code, state)
         code += MONITOREXIT
     }
 
@@ -489,12 +475,13 @@ object StmtProcessor {
         right:        Expr[V],
         target:       RewriteLabel,
         tacToLVIndex: Map[Int, Int],
-        code:         mutable.ListBuffer[CodeElement[Nothing]]
+        code:         mutable.ListBuffer[CodeElement[Nothing]],
+        state:        FrameState
     ): Unit = {
         // process the left expr
-        ExprProcessor.processExpression(left, tacToLVIndex, code)
+        ExprProcessor.processExpression(left, tacToLVIndex, code, state)
         // process the right expr
-        ExprProcessor.processExpression(right, tacToLVIndex, code)
+        ExprProcessor.processExpression(right, tacToLVIndex, code, state)
 
         code += {
             (left.cTpe, right.cTpe, condition) match {

@@ -166,10 +166,15 @@ object TACtoBC {
         // list of all CodeElements including bytecode instructions as well as pseudo instructions
         val code = mutable.ListBuffer[CodeElement[Nothing]]()
 
+        val state = FrameState(
+            stack = mutable.Stack.empty,
+            varLocations = mutable.Map.empty
+        )
+
         tacStmts.foreach { case (stmt, tacIndex) =>
             // add label to the list
             code += LabelElement(labels(tacIndex))
-            StmtProcessor.processStmt(stmt, tacToLVIndex, labels, code)
+            StmtProcessor.processStmt(stmt, tacToLVIndex, labels, code, state)
         }
         code.toIndexedSeq
     }
