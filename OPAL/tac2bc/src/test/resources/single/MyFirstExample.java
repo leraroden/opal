@@ -1,8 +1,9 @@
 public class MyFirstExample {
     public static void main(String[] args) {
-        int a = 1;
         int b = 2;
-        int c = a + b;
-        System.out.println(c);
+        int c = 3;
+        int d = b + c;
+        int e = d + b;
+        System.out.println(e);
     }
 }

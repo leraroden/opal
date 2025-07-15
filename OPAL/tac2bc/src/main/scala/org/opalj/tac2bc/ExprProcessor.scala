@@ -292,8 +292,8 @@ object ExprProcessor {
         state:        FrameState
     ): Unit = {
 
-        if(state.isOnStack(variable.asVar)) {
-            state.getStackIndex(variable.asVar) match {
+        if(state.isOnStack(variable.asVar, tacToLVIndex)) {
+            state.getStackIndex(variable.asVar, tacToLVIndex) match {
                 /* Fall 1: Wert liegt schon ganz oben auf dem Stack -> gar nichts tun */
                 case 0 => // no-op
                 /* Fall 2: Wert liegt tiefer -> mit SWAP nach oben holen */
@@ -389,15 +389,15 @@ object ExprProcessor {
         val leftVar  = binaryExpr.left.asVar
         val rightVar = binaryExpr.right.asVar
 
-        if (state.isOnStack(leftVar) && state.isOnStack(rightVar)) {
-            val leftIndex = state.getStackIndex(leftVar)
-            val rightIndex = state.getStackIndex(rightVar)
+        if (state.isOnStack(leftVar, tacToLVIndex) && state.isOnStack(rightVar, tacToLVIndex)) {
+            val leftIndex = state.getStackIndex(leftVar, tacToLVIndex)
+            val rightIndex = state.getStackIndex(rightVar, tacToLVIndex)
 
-            if(!leftIndex.equals(0) | leftIndex.equals(1)) {
+            if(!(leftIndex.equals(0) | leftIndex.equals(1))) {
                 processExpression(binaryExpr.left, tacToLVIndex, code, state)
             }
 
-            if(!rightIndex.equals(0) | leftIndex.equals(1)) {
+            if(!(rightIndex.equals(0) | rightIndex.equals(1))) {
                 processExpression(binaryExpr.right, tacToLVIndex, code, state)
             }
         }
