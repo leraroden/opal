@@ -18,24 +18,7 @@ import org.opalj.RelationalOperators.CMP
 import org.opalj.RelationalOperators.CMPG
 import org.opalj.RelationalOperators.CMPL
 import org.opalj.ba.CodeElement
-import org.opalj.br.ArrayType
-import org.opalj.br.BooleanType
-import org.opalj.br.ByteType
-import org.opalj.br.CharType
-import org.opalj.br.ComputationalTypeDouble
-import org.opalj.br.ComputationalTypeFloat
-import org.opalj.br.ComputationalTypeInt
-import org.opalj.br.ComputationalTypeLong
-import org.opalj.br.ComputationalTypeReference
-import org.opalj.br.DoubleType
-import org.opalj.br.FieldType
-import org.opalj.br.FloatType
-import org.opalj.br.IntegerType
-import org.opalj.br.LongType
-import org.opalj.br.MethodDescriptor
-import org.opalj.br.ClassType
-import org.opalj.br.ReferenceType
-import org.opalj.br.ShortType
+import org.opalj.br.{ArrayType, BooleanType, ByteType, CharType, ClassType, ComputationalTypeDouble, ComputationalTypeFloat, ComputationalTypeInt, ComputationalTypeLong, ComputationalTypeReference, DoubleType, FieldType, FloatType, IntegerType, LongType, MethodDescriptor, ReferenceType, ShortType}
 import org.opalj.br.instructions._
 import org.opalj.tac.{ArrayLength, ArrayLoad, BinaryExpr, Call, ClassConst, Compare, Const, DoubleConst, DynamicConst, Expr, FloatConst, GetField, GetStatic, InstanceOf, IntConst, InvokedynamicFunctionCall, LongConst, MethodHandleConst, MethodTypeConst, New, NewArray, NonVirtualFunctionCall, NonVirtualMethodCall, NullExpr, PrefixExpr, PrimitiveTypecastExpr, StaticFunctionCall, StaticMethodCall, StringConst, V, Var, VirtualFunctionCall, VirtualMethodCall}
 import org.opalj.tac2bc.VarUtils.getVarId
@@ -309,96 +292,41 @@ object ExprProcessor {
         state:        FrameState
     ): Unit = {
 
-        // Ermittele Location rein ID-basiert
-        val locOpt: Option[Location] = state.locationOf(variable.asVar, tacToLVIndex)
+        if(state.isOnStack(variable.asVar)) {
+            state.getStackIndex(variable.asVar) match {
+                /* Fall 1: Wert liegt schon ganz oben auf dem Stack -> gar nichts tun */
+                case 0 => // no-op
+                /* Fall 2: Wert liegt tiefer -> mit SWAP nach oben holen */
+                case 1 =>
+                    if(!variable.cTpe.isCategory2) {
+                        code += SWAP
+                        state.swap()
+                    }
+                case _  => //TODO
+            }
+        } else {
 
-        locOpt match {
-            /* Fall 1: Wert liegt schon ganz oben auf dem Stack ➜ gar nichts tun */
-            case Some(OnStack(0)) => // no-op
+            val index = if (state.isInLocals(variable)) {
+                state.getLocalIndex(variable)
+            } else {
+                getVarId(variable, tacToLVIndex)
+            }
 
-            /* Fall 2: Wert liegt tiefer ➜ mit DUP / SWAP nach oben holen */
-            case Some(OnStack(depth)) =>
-                if (depth == 1) {
-                    code += SWAP
-                    state.swap()
-                } else {
-                    //TODO
-                    //code += DUP
-                    //state.dup();
-                    //state.swap()
-                }
+            val loadInstr = variable.cTpe match {
+                case ComputationalTypeInt       => ILOAD.canonicalRepresentation(index)
+                case ComputationalTypeFloat     => FLOAD.canonicalRepresentation(index)
+                case ComputationalTypeDouble    => DLOAD.canonicalRepresentation(index)
+                case ComputationalTypeLong      => LLOAD.canonicalRepresentation(index)
+                case ComputationalTypeReference => ALOAD.canonicalRepresentation(index)
+                case _ =>
+                    throw new UnsupportedOperationException(
+                        "Unsupported computational type for loading variable" + variable
+                    )
+            }
 
-            /* Fall 3: Wert nicht Available  ➜ regulärer LOAD */
-            case Some(NotAvailable) =>
-                //TODO
-                val index = state.varLocations.get(variable) match {
-                    case Some(InLocal(i)) => i
-                    case _                => getVarId(variable, tacToLVIndex)
-                }
-
-                val loadInstr = variable.cTpe match {
-                    case ComputationalTypeInt       => ILOAD.canonicalRepresentation(index)
-                    case ComputationalTypeFloat     => FLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeDouble    => DLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeLong      => LLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeReference => ALOAD.canonicalRepresentation(index)
-                    case _ =>
-                        throw new UnsupportedOperationException(
-                            "Unsupported computational type for loading variable" + variable
-                        )
-                }
-
-                code += loadInstr
-                state.updateFrame(loadInstr)
-                state.varLocations(variable) = OnStack(0)
-
-            /* Fall 4: Wert in Local ➜ regulärer LOAD */
-            case Some(InLocal(idx)) =>
-                //TODO
-                val index = state.varLocations.get(variable) match {
-                    case Some(InLocal(i)) => i
-                    case _                => getVarId(variable, tacToLVIndex)
-                }
-
-                val loadInstr = variable.cTpe match {
-                    case ComputationalTypeInt       => ILOAD.canonicalRepresentation(index)
-                    case ComputationalTypeFloat     => FLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeDouble    => DLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeLong      => LLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeReference => ALOAD.canonicalRepresentation(index)
-                    case _ =>
-                        throw new UnsupportedOperationException(
-                            "Unsupported computational type for loading variable" + variable
-                        )
-                }
-
-                code += loadInstr
-                state.updateFrame(loadInstr)
-                state.varLocations(variable) = OnStack(0)
-
-            /* Fall 5: Wert nicht gefunden ➜ regulärer LOAD */
-            case None =>
-                //TODO
-                val index = state.varLocations.get(variable) match {
-                    case Some(InLocal(i)) => i
-                    case _                => getVarId(variable, tacToLVIndex)
-                }
-
-                val loadInstr = variable.cTpe match {
-                    case ComputationalTypeInt       => ILOAD.canonicalRepresentation(index)
-                    case ComputationalTypeFloat     => FLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeDouble    => DLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeLong      => LLOAD.canonicalRepresentation(index)
-                    case ComputationalTypeReference => ALOAD.canonicalRepresentation(index)
-                    case _ =>
-                        throw new UnsupportedOperationException(
-                            "Unsupported computational type for loading variable" + variable
-                        )
-                }
-
-                code += loadInstr
-                state.updateFrame(loadInstr)
-                state.varLocations(variable) = OnStack(0)
+            code += loadInstr
+            //state.updateFrame(loadInstr)
+            state.loadLocal(variable)
         }
     }
 
@@ -423,8 +351,9 @@ object ExprProcessor {
         }
 
         code += storeInstr
-        state.updateFrame(storeInstr)
-        state.varLocations(variable) = InLocal(index)
+        //state.updateFrame(storeInstr)
+        state.storeLocal(variable)
+        //state.varLocations(variable) = InLocal(index)
     }
 
     def processGetField(
@@ -460,15 +389,17 @@ object ExprProcessor {
         val leftVar  = binaryExpr.left.asVar
         val rightVar = binaryExpr.right.asVar
 
-        val leftLocation = state.locationOf(leftVar, tacToLVIndex)
-        val rightLocation = state.locationOf(rightVar, tacToLVIndex)
+        if (state.isOnStack(leftVar) && state.isOnStack(rightVar)) {
+            val leftIndex = state.getStackIndex(leftVar)
+            val rightIndex = state.getStackIndex(rightVar)
 
-        if (leftLocation.exists { case OnStack(0)|OnStack(1) => false; case _ => true }) {
-            processExpression(binaryExpr.left, tacToLVIndex, code, state)
-        }
+            if(!leftIndex.equals(0) | leftIndex.equals(1)) {
+                processExpression(binaryExpr.left, tacToLVIndex, code, state)
+            }
 
-        if (rightLocation.exists { case OnStack(0)|OnStack(1) => false; case _ => true }) {
-            processExpression(binaryExpr.right, tacToLVIndex, code, state)
+            if(!rightIndex.equals(0) | leftIndex.equals(1)) {
+                processExpression(binaryExpr.right, tacToLVIndex, code, state)
+            }
         }
 
         val instr = (binaryExpr.cTpe, binaryExpr.op) match {
@@ -527,7 +458,7 @@ object ExprProcessor {
         // First, process the operand expression and add its instructions to the buffer
         processExpression(primitiveTypecastExpr.operand, tacToLVIndex, code, state)
 
-        code += {
+        val instr = {
             (primitiveTypecastExpr.operand.cTpe, primitiveTypecastExpr.targetTpe) match {
                 // -> to Float
                 case (ComputationalTypeDouble, FloatType) => D2F
@@ -557,5 +488,8 @@ object ExprProcessor {
                     )
             }
         }
+
+        code += instr
+        state.updateFrame(instr)
     }
 }

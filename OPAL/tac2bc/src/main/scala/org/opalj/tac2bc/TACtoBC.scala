@@ -3,19 +3,12 @@ package org.opalj
 package tac2bc
 
 import scala.collection.mutable
-
 import org.opalj.ba.CodeElement
 import org.opalj.ba.LabelElement
 import org.opalj.br.MethodDescriptor
 import org.opalj.br.analyses.SomeProject
 import org.opalj.br.instructions.RewriteLabel
-import org.opalj.tac.AITACode
-import org.opalj.tac.DUVar
-import org.opalj.tac.Expr
-import org.opalj.tac.Stmt
-import org.opalj.tac.TACMethodParameter
-import org.opalj.tac.UVar
-import org.opalj.tac.V
+import org.opalj.tac.{AITACode, Assignment, DUVar, Expr, Stmt, TACMethodParameter, UVar, V, Var}
 import org.opalj.value.ValueInformation
 
 object TACtoBC {
@@ -168,13 +161,24 @@ object TACtoBC {
 
         val state = FrameState(
             stack = mutable.Stack.empty,
-            varLocations = mutable.Map.empty
+            localVarSlots = mutable.Map.empty
         )
+
+
+        val futureUses = mutable.Map.empty[Var[V],Int].withDefaultValue(0)
+        tacStmts.zipWithIndex.foreach { case ((stmt, _), i) =>
+            stmt match {
+                case Assignment(_, dVar: DUVar[_], _) =>
+                    val uses = dVar.usedBy.size  // alle Verwendungen im ganzen Methodenkörper
+                    futureUses(dVar.asVar) = uses
+                case _ =>
+            }
+        }
 
         tacStmts.foreach { case (stmt, tacIndex) =>
             // add label to the list
             code += LabelElement(labels(tacIndex))
-            StmtProcessor.processStmt(stmt, tacToLVIndex, labels, code, state)
+            StmtProcessor.processStmt(stmt, tacToLVIndex, labels, code, state, futureUses)
         }
         code.toIndexedSeq
     }

@@ -14,33 +14,10 @@ import org.opalj.RelationalOperators.NE
 import org.opalj.ba.{CATCH, CodeElement, LabelElement, TRY, TRYEND}
 import org.opalj.br.{BooleanType, BootstrapMethod, ByteType, CharType, ClassType, ComputationalTypeDouble, ComputationalTypeFloat, ComputationalTypeInt, ComputationalTypeLong, ComputationalTypeReference, DoubleType, FieldType, FloatType, IntegerType, LongType, MethodDescriptor, PCs, ReferenceType, ShortType}
 import org.opalj.br.analyses.SomeProject
-import org.opalj.br.instructions.{AASTORE, ARETURN, ATHROW, BASTORE, CASTORE, CHECKCAST, DASTORE, DEFAULT_INVOKEDYNAMIC, DRETURN, FASTORE, FRETURN, IASTORE, IRETURN, LASTORE, LRETURN, LabeledGOTO, LabeledIFNONNULL, LabeledIFNULL, LabeledIF_ACMPEQ, LabeledIF_ACMPNE, LabeledIF_ICMPEQ, LabeledIF_ICMPGE, LabeledIF_ICMPGT, LabeledIF_ICMPLE, LabeledIF_ICMPLT, LabeledIF_ICMPNE, LabeledJSR, LabeledLOOKUPSWITCH, LabeledTABLESWITCH, MONITORENTER, MONITOREXIT, NOP, POP, POP2, PUTFIELD, PUTSTATIC, RET, RETURN, RewriteLabel, SASTORE}
+import org.opalj.br.instructions.{AASTORE, ARETURN, ATHROW, BASTORE, CASTORE, CHECKCAST, DASTORE, DEFAULT_INVOKEDYNAMIC, DRETURN, DUP, FASTORE, FRETURN, IASTORE, IRETURN, LASTORE, LRETURN, LabeledGOTO, LabeledIFNONNULL, LabeledIFNULL, LabeledIF_ACMPEQ, LabeledIF_ACMPNE, LabeledIF_ICMPEQ, LabeledIF_ICMPGE, LabeledIF_ICMPGT, LabeledIF_ICMPLE, LabeledIF_ICMPLT, LabeledIF_ICMPNE, LabeledJSR, LabeledLOOKUPSWITCH, LabeledTABLESWITCH, MONITORENTER, MONITOREXIT, NOP, POP, POP2, PUTFIELD, PUTSTATIC, RET, RETURN, RewriteLabel, SASTORE}
 import org.opalj.collection.immutable.IntIntPair
 import org.opalj.collection.immutable.IntTrieSet
-import org.opalj.tac.ArrayStore
-import org.opalj.tac.Assignment
-import org.opalj.tac.Call
-import org.opalj.tac.CaughtException
-import org.opalj.tac.Checkcast
-import org.opalj.tac.Expr
-import org.opalj.tac.ExprStmt
-import org.opalj.tac.Goto
-import org.opalj.tac.If
-import org.opalj.tac.InvokedynamicMethodCall
-import org.opalj.tac.JSR
-import org.opalj.tac.MonitorEnter
-import org.opalj.tac.MonitorExit
-import org.opalj.tac.Nop
-import org.opalj.tac.PutField
-import org.opalj.tac.PutStatic
-import org.opalj.tac.Ret
-import org.opalj.tac.Return
-import org.opalj.tac.ReturnValue
-import org.opalj.tac.Stmt
-import org.opalj.tac.Switch
-import org.opalj.tac.Throw
-import org.opalj.tac.V
-import org.opalj.tac.Var
+import org.opalj.tac.{ArrayStore, Assignment, Call, CaughtException, Checkcast, DVar, Expr, ExprStmt, Goto, If, InvokedynamicMethodCall, JSR, MonitorEnter, MonitorExit, Nop, PutField, PutStatic, Ret, Return, ReturnValue, Stmt, Switch, Throw, V, Var}
 
 object StmtProcessor {
 
@@ -59,11 +36,12 @@ object StmtProcessor {
         tacToLVIndex: Map[Int, Int],
         labels:       Array[RewriteLabel],
         code:         mutable.ListBuffer[CodeElement[Nothing]],
-        state:        FrameState
+        state:        FrameState,
+        futureUses:   mutable.Map[Var[V],Int]
     )(implicit project: SomeProject): Unit = {
         stmt match {
             case Assignment(_, targetVar, expr) =>
-                processAssignment(targetVar, expr, tacToLVIndex, code, state)
+                processAssignment(targetVar, expr, tacToLVIndex, code, state, futureUses)
             case ArrayStore(_, arrayRef, index, value) =>
                 processArrayStore(arrayRef, index, value, tacToLVIndex, code, state)
             case CaughtException(_, exceptionType, throwingStmts) =>
@@ -160,12 +138,13 @@ object StmtProcessor {
         expr:         Expr[V],
         tacToLVIndex: Map[Int, Int],
         code:         mutable.ListBuffer[CodeElement[Nothing]],
-        state:        FrameState
+        state:        FrameState,
+        futureUses:   mutable.Map[Var[V],Int]
     ): Unit = {
         ExprProcessor.processExpression(expr, tacToLVIndex, code, state)
 
         // Aktualisiert varLocations und den Stack.
-        state.varLocations(targetVar) = OnStack(0)
+        //state.varLocations(targetVar) = OnStack(0)
 
         // Ersetzen den Platzhalter auf dem Stack durch targetVar.
         if (state.stack.nonEmpty) {
@@ -173,23 +152,46 @@ object StmtProcessor {
             state.stack.push((targetVar.asInstanceOf[V], ctg))
         }
 
-        if (shouldSpill(targetVar, state)) {
-            // Wert muss in Local → generate STORE
-            ExprProcessor.storeVariable(targetVar, tacToLVIndex, code, state)
+//        if (shouldStore(targetVar, state)) {
+//            // Wert muss in Local → generate STORE
+//            ExprProcessor.storeVariable(targetVar, tacToLVIndex, code, state)
+//        }
+
+        targetVar match {
+            case dvar: DVar[_] =>
+                if (shouldDup(dvar)) {
+                    code += DUP
+                    state.dup()
+                } else if(futureUses(targetVar) > 1) {
+                    ExprProcessor.storeVariable(targetVar, tacToLVIndex, code, state)
+
+                    //state.varLocations(targetVar) = InLocal(0)
+                    futureUses(targetVar) -= 1
+                }
         }
     }
 
-    /** Spill, wenn die nächste TAC-Statement-Nutzung von targetVar **nicht** Stack-basiert erfolgt. */
-    private def shouldSpill(
-        variable: Var[V],
-        state: FrameState
-        ): Boolean = {
-
-        state.varLocations.get(variable.asVar) match {
-            case Some(OnStack(0))   => false
-            case _            => true
+    private def shouldDup(v: DVar[_]): Boolean = {
+        // sorted list of use‐positions
+        val uses = v.usedBy.iterator.toSeq.sorted
+        // TODO: es können beliebig viele sein, dann müssen wir die Paare miteinander vergleichen
+        uses.size match {
+            case 2 => !uses.sliding(2).exists { case Seq(p, q) => (q - p) > 1 }
+            case _ => false
         }
     }
+
+//    /** Store, wenn die nächste TAC-Statement-Nutzung von targetVar **nicht** Stack-basiert erfolgt. */
+//    private def shouldStore(
+//        variable: Var[V],
+//        state: FrameState
+//        ): Boolean = {
+//
+//        state.varLocations.get(variable.asVar) match {
+//            case Some(OnStack(0))   => false
+//            case _            => true
+//        }
+//    }
 
     def processExprStmt(
         expr:         Expr[V],
