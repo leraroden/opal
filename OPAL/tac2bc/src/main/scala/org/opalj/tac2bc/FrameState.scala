@@ -24,6 +24,25 @@ case class FrameState(
         stack.push(stack.top)
     }
 
+    def dup_x2(): Unit = {
+        require(stack.size >= 3, "Stack has too few elements for DUP_X2")
+
+        val (v1, ctg1) = stack.pop()
+        val (v2, ctg2) = stack.pop()
+
+        if (v2.cTpe.isCategory2) {
+            //TODO
+        } else {
+            val (v3, cat3) = stack.pop()
+            // Form: value3, value2, value1 (alle Category 1)
+            stack.push((v1, ctg1))
+            stack.push((v3, cat3))
+            stack.push((v2, ctg2))
+            stack.push((v1, ctg1))
+        }
+    }
+
+
     /** Vertauscht die obersten beiden Elemente. */
     def swap(): Unit = {
         val (v1, ctg1) = stack.pop()
@@ -70,11 +89,7 @@ case class FrameState(
     //TODO operandsize testen
     private def popFromStack(n: Int): Unit = {
         repeat(n) {
-            val (v, _) = stack.pop()
-//            if (v != null) {
-//                varLocations(v) = NotAvailable
-//            }
-            //decrementAllStackDepths()
+            stack.pop()
         }
     }
 
@@ -99,7 +114,6 @@ case class FrameState(
         }
 
         repeat(n) {
-            //incrementAllStackDepths()
             stack.push((null.asInstanceOf[V], ctg))
         }
     }
@@ -120,9 +134,9 @@ case class FrameState(
      * Versucht, per TAC‑ID die Tiefe der Variable zu finden.
      */
     private def stackIndexOf(
-                                variable: Var[V],
-                                tacToLVIndex: Map[Int, Int]
-                            ): Option[Int] = {
+        variable: Var[V],
+        tacToLVIndex: Map[Int, Int]
+    ): Option[Int] = {
         val targetId = getVarId(variable, tacToLVIndex)
         stack.iterator.zipWithIndex.collectFirst {
             case ((v, _), depth)
@@ -132,17 +146,35 @@ case class FrameState(
         }
     }
 
-    //TODO per ID
-    private def localIndexOf(variable: Var[V]): Option[Int] = {
-        localVarSlots.get(variable)
+    /**
+     * Versucht, per TAC‑ID den Local‑Slot der Variable zu finden.
+     */
+    private def localIndexOf(
+        variable: Var[V],
+        tacToLVIndex: Map[Int, Int]
+    ): Option[Int] = {
+        val targetId = getVarId(variable, tacToLVIndex)
+        localVarSlots.collectFirst {
+            case (key, idx) if getVarId(key, tacToLVIndex) == targetId => idx
+        }
     }
 
-    def getLocalIndex(variable: Var[V]): Int = {
-        localIndexOf(variable).getOrElse(
-            throw new NoSuchElementException(s"Variable $variable not in locals")
-        )
+    /**Liefert den Local‑Slot‑Index per TAC‑ID */
+    def getLocalIndex(
+        variable: Var[V],
+        tacToLVIndex: Map[Int, Int]
+    ): Int = {
+        localIndexOf(variable, tacToLVIndex).getOrElse {
+            val id = getVarId(variable, tacToLVIndex)
+            throw new NoSuchElementException(
+                s"Variable $variable (TAC‑ID=$id) not in locals"
+            )
+        }
     }
 
+    /**
+     * Checks whether the given TAC variable is currently stored in the operand stack.
+     */
     def isOnStack(variable: V, tacToLVIndex: Map[Int, Int]): Boolean = {
         val targetId = getVarId(variable, tacToLVIndex)
         stack.iterator.exists { case (v, _) =>
@@ -150,7 +182,13 @@ case class FrameState(
         }
     }
 
-    def isInLocals(variable: Var[V]): Boolean = {
-        localVarSlots.contains(variable)
+    /**
+     * Checks whether the given TAC variable is currently stored in the local‐variable map.
+     */
+    def isInLocals(variable: Var[V], tacToLVIndex: Map[Int, Int]): Boolean = {
+        val targetId = getVarId(variable, tacToLVIndex)
+        localVarSlots.exists{ case (v, _) =>
+            v != null && getVarId(v, tacToLVIndex) == targetId
+        }
     }
 }

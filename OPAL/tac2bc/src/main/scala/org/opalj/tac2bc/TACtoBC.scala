@@ -2,13 +2,12 @@
 package org.opalj
 package tac2bc
 
-import scala.collection.mutable
 import org.opalj.ba.CodeElement
-import org.opalj.ba.LabelElement
+import scala.collection.mutable
 import org.opalj.br.MethodDescriptor
 import org.opalj.br.analyses.SomeProject
 import org.opalj.br.instructions.RewriteLabel
-import org.opalj.tac.{AITACode, Assignment, DUVar, Expr, Stmt, TACMethodParameter, UVar, V, Var}
+import org.opalj.tac.{AITACode, DUVar, Expr, Stmt, TACMethodParameter, UVar, V}
 import org.opalj.value.ValueInformation
 
 object TACtoBC {
@@ -20,7 +19,6 @@ object TACtoBC {
      * of bytecode instructions. It handles various types of TAC statements and expressions, translating them
      * into their equivalent bytecode form.
      *
-     * @param method method to be translated
      * @param tac TAC representation of a method to be converted into bytecode.
      * @return A Sequence of bytecode instructions representing the method's functionality
      */
@@ -41,7 +39,6 @@ object TACtoBC {
      * 2. Assigning LV indices to method parameters.
      * 3. Populating the `tacToLVIndex` map with unique LV indices for each unique variable.
      *
-     * @param method Method which the Array 'tacStmts' belongs to
      * @param tacStmts Array of tuples where each tuple contains a TAC statement and its index.
      */
     private def prepareLvIndices(
@@ -138,6 +135,42 @@ object TACtoBC {
         nextLVIndex
     }
 
+    //DELETE?
+//    private def fillFutureVarsUsesInVar(
+//        variable: Var[V],
+//        tacToLVIndex: Map[Int, Int],
+//        futureUses: mutable.Map[Int, VarUsage]
+//    ): Unit = {
+//        variable match {
+//            case dvar: DVar[_] =>
+//                val id = getVarId(dvar.asInstanceOf[Var[V]], tacToLVIndex)
+//                val info = futureUses.getOrElseUpdate(id, VarUsage())
+//                val defIdx = dvar.originatedAt
+//                if (!info.defSites.contains(defIdx)) info.defSites += defIdx
+//
+//                dvar.usedBy.foreach { useIdx =>
+//                    if (!info.useSites.contains(useIdx)) info.useSites += useIdx
+//                }
+//
+//                if (info.varRef.isEmpty) info.varRef = Some(variable)
+//
+//            case _ =>
+//        }
+//    }
+
+    def insertMissingStores(
+        code: mutable.ListBuffer[CodeElement[Nothing]],
+        futureUses: mutable.Map[Int, VarUsage],
+        tacToLVIndex: Map[Int, Int],
+        state:        FrameState,
+    ): Unit = {
+        futureUses.values.foreach{ usage =>
+            if(usage.storedInLocals && usage.varRef.isDefined) {
+                ExprProcessor.storeVariable(usage.varRef.get, tacToLVIndex, code, state, futureUses, usage.defSites.head + 1)
+            }
+        }
+    }
+
     /**
      * Translates TAC statements to bytecode instructions.
      *
@@ -164,22 +197,13 @@ object TACtoBC {
             localVarSlots = mutable.Map.empty
         )
 
+        val futureUses = mutable.Map.empty[Int,VarUsage]
 
-        val futureUses = mutable.Map.empty[Var[V],Int].withDefaultValue(0)
-        tacStmts.zipWithIndex.foreach { case ((stmt, _), i) =>
-            stmt match {
-                case Assignment(_, dVar: DUVar[_], _) =>
-                    val uses = dVar.usedBy.size  // alle Verwendungen im ganzen Methodenkörper
-                    futureUses(dVar.asVar) = uses
-                case _ =>
-            }
-        }
-
-        tacStmts.foreach { case (stmt, tacIndex) =>
+        tacStmts.foreach { case (stmt, _) =>
             // add label to the list
-            code += LabelElement(labels(tacIndex))
             StmtProcessor.processStmt(stmt, tacToLVIndex, labels, code, state, futureUses)
         }
+        insertMissingStores(code, futureUses, tacToLVIndex, state)
         code.toIndexedSeq
     }
 }
