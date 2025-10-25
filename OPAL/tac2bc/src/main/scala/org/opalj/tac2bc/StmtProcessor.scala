@@ -108,7 +108,8 @@ object StmtProcessor {
                     exceptionType,
                     throwingStmts,
                     code,
-                    labels
+                    labels,
+                    tacContext
                 )
             case ExprStmt(_, expr) =>
                 processExprStmt(expr, tacToLVIndex, code, tacContext)
@@ -192,6 +193,9 @@ object StmtProcessor {
         if(!delayStmtVisit){
             if (!tacContext.isStmtVisited(stmt)) {
                 code += LabelElement(labels(stmtIndex))
+                if(tacContext.hasInsertionAtLabel(LabelElement(labels(stmtIndex)))) {
+                    tacContext.applyInsertionAtLabel(LabelElement(labels(stmtIndex)))
+                }
             }
             tacContext.visitedStmt += stmt
         } else {
@@ -206,6 +210,9 @@ object StmtProcessor {
                          tacContext: Tac2BcContext): Unit = {
         if (!code.contains(LabelElement(labels(stmtIndex)))) {
             code += LabelElement(labels(stmtIndex))
+            if(tacContext.hasInsertionAtLabel(LabelElement(labels(stmtIndex)))) {
+                tacContext.applyInsertionAtLabel(LabelElement(labels(stmtIndex)))
+            }
         }
         tacContext.visitedStmt += stmt
     }
@@ -392,7 +399,8 @@ object StmtProcessor {
         exceptionType: Option[ClassType],
         throwingStmts: IntTrieSet,
         code:          mutable.ListBuffer[CodeElement[Nothing]],
-        labels:        Array[RewriteLabel]
+        labels:        Array[RewriteLabel],
+        tacContext:    Tac2BcContext,
     ): Unit = {
         // TODO: handle CaughtExceptions correctly
         // below is an idea on how to handle caught exceptions - but its not working yet:
@@ -417,28 +425,19 @@ object StmtProcessor {
             if (pc < minPC) minPC = pc
         })
         maxPC = maxPC + 1
-        val minPCLabel = labels(minPC)
-        val maxPCLabel = labels(maxPC)
+        val minPCLabel = labels(pc)
+        val maxPCLabel = labels(maxPC + 1)
         println(s"$minPCLabel $maxPCLabel")
 
-        val minIndex = code.indexWhere {
-            case LabelElement(label: RewriteLabel) => label == minPCLabel
-            case _                                 => false
-        }
-        val maxIndex = code.indexWhere {
-            case LabelElement(label: RewriteLabel) => label == maxPCLabel
-            case _                                 => false
-        }
-        if (minIndex != -1 && maxIndex != -1) {
-            val preMinInstr = TRY(Symbol("test"))
-            val postMaxInstr = TRYEND(Symbol("test"))
-            code.insert(minIndex + 1, preMinInstr)
-            code += postMaxInstr
-            code += CATCH(Symbol("test"), 0, exceptionType)
-        } else {
-            println("ERROR: minPCLabel oder maxPCLabel nicht gefunden!")
-        }
+        code += CATCH(Symbol(pc.toString), 0, exceptionType)
+        val preMinInstr = TRY(Symbol(pc.toString))
+        val postMaxInstr = TRYEND(Symbol(pc.toString))
+        tacContext.saveInsertionAtLabel(LabelElement(maxPCLabel), postMaxInstr)
+        tacContext.saveInsertionAtLabel(LabelElement(minPCLabel), preMinInstr)
 
+        //store throwable variable if it was loaded
+        if (tacContext.isVarThrowable(throwingStmts))
+            tacContext.emitStoreForThrowable(throwingStmts)
     }
 
     def processThrow(
@@ -447,8 +446,12 @@ object StmtProcessor {
         code:         mutable.ListBuffer[CodeElement[Nothing]],
         tacContext:   Tac2BcContext
     ): Unit = {
-        ExprProcessor.processExpression(exception, tacToLVIndex, code, tacContext)
         code += ATHROW
+        if (exception.asVar.definedBy.head < 0) {
+            ExprProcessor.loadVariable(exception.asVar, tacToLVIndex, code)
+            tacContext.throwableVarList(exception.asVar) = exception.asVar.definedBy
+        } else
+            tacContext.emitStmt(exception.asVar.definedBy.head, delayStmtVisit = true)
     }
 
     def processPutStatic(

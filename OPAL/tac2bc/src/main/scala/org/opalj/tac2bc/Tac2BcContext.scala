@@ -1,9 +1,10 @@
 package org.opalj.tac2bc
 
-import org.opalj.ba.CodeElement
+import org.opalj.ba.{CodeElement, LabelElement}
 import org.opalj.br.analyses.SomeProject
 import org.opalj.br.instructions.{DUP, DUP2, RewriteLabel}
-import org.opalj.tac.{Assignment, Const, DVar, Expr, NewArray, Stmt, UVar, V, Var, New}
+import org.opalj.collection.immutable.IntTrieSet
+import org.opalj.tac.{Assignment, Const, DVar, Expr, New, NewArray, Stmt, UVar, V, Var}
 import org.opalj.value.ValueInformation
 
 import scala.collection.mutable
@@ -28,6 +29,12 @@ class Tac2BcContext(
     val visitedStmt: ArrayBuffer[Stmt[V]] = ArrayBuffer[Stmt[V]]()
 
     val delayedVisitStmt: ArrayBuffer[Stmt[V]] = ArrayBuffer[Stmt[V]]()
+
+    /** Stores code elements that should be inserted later at a specific label. */
+    private val labelInsertions = mutable.Map[LabelElement, CodeElement[Nothing]]()
+
+    /** Maps each throwable variable to its intTrieSet in TAC. */
+    val throwableVarList = mutable.Map[Var[V], IntTrieSet]()
 
     def emitStmt(defIdx: Int,
                  delayStmtVisit: Boolean = false): Unit = {
@@ -74,6 +81,7 @@ class Tac2BcContext(
         }
     }
 
+    //TODO: kein store für exceptions?
     /**
      * Handles variables with multiple uses:
      * loads the value from a local onto the stack or stores it in a local.
@@ -82,11 +90,12 @@ class Tac2BcContext(
         useSitesLeft(defIdx) -= 1
 
         if(useSitesLeft(defIdx) == 0) {
-            ExprProcessor.storeVariable(variable, tacToLVIndex, code)
+            //ExprProcessor.storeVariable(variable, tacToLVIndex, code)
             if (variable.cTpe.isCategory2) code += DUP2 else code += DUP
             emitDef(defIdx)
         } else {
-            ExprProcessor.loadVariable(variable, tacToLVIndex, code)
+            //ExprProcessor.loadVariable(variable, tacToLVIndex, code)
+
         }
     }
 
@@ -184,6 +193,34 @@ class Tac2BcContext(
             val arrLoadVarUseSites = arrLoadVar.asVar.usedBy.size
             val newUseSites = arrLoadVarUseSites + arrRefUseSites
             useSitesLeft.getOrElseUpdate(arrRefDefIdx, newUseSites - 1)
+        }
+    }
+
+    /** Inserts the code element that was saved for this label (if any). */
+    def applyInsertionAtLabel(label: LabelElement): Unit = {
+        val instruction = labelInsertions(label)
+        code += instruction
+    }
+
+    /** Save a code element to be inserted after the given label. */
+    def saveInsertionAtLabel(label: LabelElement, excInstruction: CodeElement[Nothing]): Unit = {
+        labelInsertions(label) = excInstruction
+    }
+
+    /** Checks whether there is an insertion saved for this label. */
+    def hasInsertionAtLabel(label: LabelElement): Boolean = {
+        labelInsertions.contains(label)
+    }
+
+    /** Checks if there is a throwable variable saved for this intTrieSet. */
+    def isVarThrowable(intTrieSet: IntTrieSet): Boolean = {
+        throwableVarList.exists { case (_, ds) => ds == intTrieSet }
+    }
+
+    /** Emits store instruction for the variable saved at the given intTrieSet. */
+    def emitStoreForThrowable(intTrieSet: IntTrieSet): Unit = {
+        throwableVarList.foreach{ entry =>
+            ExprProcessor.storeVariable(entry._1.asVar, tacToLVIndex, code)
         }
     }
 }

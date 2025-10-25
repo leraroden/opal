@@ -251,7 +251,11 @@ object ExprProcessor {
         }
 
         // Load the index onto the stack
-        tacContext.emitStmt(arrayLoadExpr.index.asVar.definedBy.head, delayStmtVisit)
+        if (arrayLoadExpr.index.asVar.definedBy.head < 0)
+            ExprProcessor.loadVariable(arrayLoadExpr.index.asVar, tacToLVIndex, code)
+        else
+            tacContext.emitStmt(arrayLoadExpr.index.asVar.definedBy.head, delayStmtVisit)
+
         // Load the array reference onto the stack
         if (arrayLoadExpr.arrayRef.asVar.definedBy.head < 0)
             ExprProcessor.loadVariable(arrayLoadExpr.arrayRef.asVar, tacToLVIndex, code)
