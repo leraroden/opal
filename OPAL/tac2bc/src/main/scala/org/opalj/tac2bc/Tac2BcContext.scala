@@ -4,7 +4,8 @@ import org.opalj.ba.CodeElement
 import org.opalj.br.analyses.SomeProject
 import org.opalj.br.instructions.{DUP, DUP2, RewriteLabel}
 import org.opalj.collection.immutable.IntTrieSet
-import org.opalj.tac.{Assignment, Const, DVar, Expr, If, New, NewArray, Stmt, UVar, V, Var}
+import org.opalj.tac.{ArrayLoad, Assignment, BinaryExpr, Call, Const, DVar, Expr, GetStatic, If, New, NewArray, Stmt, UVar, V, Var}
+import org.opalj.tac2bc.ExprProcessor.{processArrayLoad, processBinaryExpr, processCall}
 import org.opalj.value.ValueInformation
 
 import scala.collection.mutable
@@ -30,11 +31,15 @@ class Tac2BcContext(
 
     val delayedVisitStmt: ArrayBuffer[Stmt[V]] = ArrayBuffer[Stmt[V]]()
 
+    val loadedStmt: ArrayBuffer[Var[V]] = ArrayBuffer[Var[V]]()
+
     def emitStmt(defIdx: Int,
                  delayStmtVisit: Boolean = false,
-                 nestedStmt: Boolean = false): Unit = {
+                 nestedStmt: Boolean = false,
+                 parentIdx: Int = -1): Unit = {
         val variable = getVarFromId(defIdx)
         val stmt = tacStmts(defIdx)._1
+        val stmtIndex = tacStmts(defIdx)._2
         if (!savedDefSites.contains(variable)) saveVariableInfo(variable)
 
         // Determine where this variable is used
@@ -43,15 +48,24 @@ class Tac2BcContext(
             case uvar: UVar[ValueInformation] => uvar.definedBy.head
         }
 
-        if (getDefSize(usedIdx, defIdx) > 1 || getUseSites(defIdx) > 1) {
+        val childIdx = variable match {
+            case dvar: DVar[ValueInformation] => dvar.usedBy.iterator.min
+            case uvar: UVar[ValueInformation] => uvar.definedBy.toList.iterator.min
+        }
+
+        if (childIdx == parentIdx && loadedStmt.contains(variable)) {
+            StmtProcessor.processStmt(stmt, tacToLVIndex, labels, code, this, stmtIndex, delayStmtVisit, nestedStmt, endNode = true)
+        }
+        else if (getDefSize(usedIdx, defIdx) > 1 || getUseSites(defIdx) > 1) {
             emitVarDef(variable)
         } else {
-            val stmtIndex = tacStmts(defIdx)._2
             StmtProcessor.processStmt(stmt, tacToLVIndex, labels, code, this, stmtIndex, delayStmtVisit, nestedStmt)
         }
     }
 
-    def emitVarUse(variable: Var[V]): Unit = {
+    def emitVarUse(variable: Var[V],
+                   delayStmtVisit: Boolean = false,
+                   nestedStmt: Boolean): Unit = {
         if (!savedDefSites.contains(variable)) saveVariableInfo(variable)
         val defSites = getIndicesFromVariable(variable)
         val defIdx = defSites.head
@@ -64,12 +78,15 @@ class Tac2BcContext(
 
         // If the current expression has multiple def-sites,
         // store the variable in a local to preserve its value.
-        if(getDefSize(usedIdx, defIdx) > 1) {
-            emitMultDef(variable, defSites)
-        } else if (getUseSites(defIdx) > 1) {
-            emitMultUse(variable, defIdx)
+//        if(getDefSize(usedIdx, defIdx) > 1) {
+//            emitMultDef(variable, defSites, delayStmtVisit, nestedStmt)
+//        } else if (getUseSites(defIdx) > 1) {
+//            emitMultUse(variable, defIdx, delayStmtVisit, nestedStmt)
+
+        if (getDefSize(usedIdx, defIdx) > 1 || getUseSites(defIdx) > 1) {
+            emitMultUse(variable, defIdx, delayStmtVisit, nestedStmt)
         } else {
-            emitDef(defIdx)
+            emitDef(defIdx, delayStmtVisit, nestedStmt)
         }
     }
 
@@ -79,6 +96,7 @@ class Tac2BcContext(
     def emitVarDef(variable: Var[V]): Unit = {
         if (!savedDefSites.contains(variable)) saveVariableInfo(variable)
         ExprProcessor.loadVariable(variable, tacToLVIndex, code)
+        loadedStmt += variable
     }
 
     /**
@@ -95,35 +113,58 @@ class Tac2BcContext(
     /**
      * Emits store of variables in locals with multiple uses.
      */
-    private def emitMultUse(variable: Var[V], defIdx: Int): Unit = {
+    private def emitMultUse(variable: Var[V],
+                            defIdx: Int,
+                            delayStmtVisit: Boolean,
+                            nestedStmt: Boolean): Unit = {
         ExprProcessor.storeVariable(variable, tacToLVIndex, code)
         if (variable.cTpe.isCategory2) code += DUP2 else code += DUP
-        emitDef(defIdx)
+        emitDef(defIdx, delayStmtVisit, nestedStmt)
     }
 
-    /**
-     * Emits store of variables in locals with multiple definition sites.
-     */
-    private def emitMultDef(variable: Var[V], defSites: IntTrieSet): Unit = {
-        ExprProcessor.storeVariable(variable, tacToLVIndex, code)
-
-        defSites.iterator.foreach { defIdx =>
-            emitDef(defIdx)
-        }
-    }
+//    /**
+//     * Emits store of variables in locals with multiple definition sites.
+//     */
+//    private def emitMultDef(variable: Var[V],
+//                            defSites: IntTrieSet,
+//                            delayStmtVisit: Boolean,
+//                            nestedStmt: Boolean): Unit = {
+//        ExprProcessor.storeVariable(variable, tacToLVIndex, code)
+//
+//        defSites.iterator.foreach { defIdx =>
+//            emitDef(defIdx, delayStmtVisit, nestedStmt)
+//        }
+//    }
 
     /**
      * Emits bytecode for the definition of a variable at the given index.
      * Loads a constant onto the stack.
      */
-    private def emitDef(defIdx: Int): Unit = {
+    private def emitDef(defIdx: Int, delayStmtVisit: Boolean, nestedStmt: Boolean): Unit = {
         val stmt = tacStmts(defIdx)._1
+        val stmtIndex = tacStmts(defIdx)._2
         stmt match {
             case Assignment(_, _, expr) =>
                 expr match {
                     case const: Const => ExprProcessor.loadConstant(const, code)
                     case newArray: NewArray[V] => ExprProcessor.processNewArray(newArray, tacToLVIndex, code, this)
                     case newExpr: New => ExprProcessor.processNewExpr(newExpr.tpe, code)
+                    case getStatic: GetStatic => ExprProcessor.processGetStatic(getStatic, code)
+                    case callExpr: Call[V @unchecked] =>
+                        val call @ Call(declaringClass, isInterface, name, descriptor) = callExpr
+                        processCall(
+                            call,
+                            declaringClass,
+                            isInterface,
+                            name,
+                            descriptor,
+                            tacToLVIndex,
+                            code,
+                            this,
+                            stmtIndex
+                        )
+                    case arrayLoadExpr: ArrayLoad[V] => processArrayLoad(arrayLoadExpr, tacToLVIndex, code, this, delayStmtVisit, stmtIndex)
+                    case binaryExpr: BinaryExpr[V] => processBinaryExpr(binaryExpr, tacToLVIndex, code, this, nestedStmt, stmtIndex)
                     case _ =>
                 }
             case _ =>
@@ -133,7 +174,7 @@ class Tac2BcContext(
     /**
      * Returns all definition indices associated with the given variable.
      */
-    private def getIndicesFromVariable(variable: Var[V]): IntTrieSet = {
+    def getIndicesFromVariable(variable: Var[V]): IntTrieSet = {
         savedDefSites.getOrElseUpdate(
             variable, {
                 variable match {
@@ -224,5 +265,13 @@ class Tac2BcContext(
             }
         }
         found
+    }
+
+    def isStmtLoaded(stmtIndex: Int): Boolean = {
+        loadedStmt.exists {
+            case dvar: DVar[ValueInformation] => dvar.originatedAt == stmtIndex
+            case uvar: UVar[ValueInformation] => uvar.definedBy.head == stmtIndex
+            case _ => false
+        }
     }
 }
